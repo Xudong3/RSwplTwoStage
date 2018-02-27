@@ -294,7 +294,7 @@ fast_fit<-function(y,g,x, pars){
 
 
 
-dtau2<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2){
+dtau2_11<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2){
    st<-sigma2+tau2
    r1<-y1-alpha-beta*x1
    r2<-y2-alpha-beta*x2
