@@ -1,8 +1,8 @@
 
 
 #setting: notation
-N1=70 ## number of sampling cluster in the first stage (population level) 
-N2=70 ##number of elements in each sampling cluster (population level)
+N1=80 ## number of sampling cluster in the first stage (population level) 
+N2=80 ##number of elements in each sampling cluster (population level)
 latitude<-1:N2
 longitude<-1:N1
 population<-expand.grid(lat=latitude,long=longitude)
@@ -435,10 +435,15 @@ fit_WPL<-function(y,g,x, pos, sc,n1, N1, n2infor, N2,  pars){
 ##Find the WPML
 ###Uninformative sampling (with weight )
 estimator_WPL<- fit_WPL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster,TwostageSRSWORSample$x, TwostageSRSWORSample$ID_unit, 
-                       TwostageSRSWORSample$PSU, n1, N1,n2infor=rep(n2,N1), N2,  pars=c(5,5,5,5,5,5))
+                       TwostageSRSWORSample$PSU, n1, N1,n2infor=rep(n2,N1), N2,     pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                           log(truevalue[6])))   
+estimator_WPL                                                              
 ###informative sampling (with weight)
 estimatoris_WPL<- fit_WPL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x, TwostageSRSWORSampleis$ID_unit, 
-                         TwostageSRSWORSampleis$PSU,n1, N1,n2infor=n2is, N2,  pars=c(5,5,5,5,5,5))
+                         TwostageSRSWORSampleis$PSU,n1, N1,n2infor=n2is, N2,  pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                     log(truevalue[6])))
+
+estimatoris_WPL
 
 
 
@@ -597,7 +602,7 @@ wpl=function (theta, y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,x=T
    i<-ij[,1]
    j<-ij[,2]
    increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
-                 sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=exp(theta[4]),tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+                 sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
    sum(increment)/T
 }
 estH_WPL=hessian(wpl, estimator_WPL[[1]])
@@ -854,7 +859,7 @@ for(i in 1:LOTS){
       i<-ij[,1]
       j<-ij[,2]
       increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
-                   sigma2=exp(theta[3]),tau2=exp(theta[4]))
+                   sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]))
       sum(increment)/T
    }
    H_PL[,,i]=hessian(pl, rb[[1]])
@@ -880,7 +885,7 @@ for(i in 1:LOTS){
       i<-ij[,1]
       j<-ij[,2]
       increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
-                   sigma2=exp(theta[3]),tau2=exp(theta[4]))
+                   sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
       sum(increment)/T
    }
    His_PL[,,i]=hessian(plis, rbis[[1]])
@@ -907,7 +912,7 @@ for(i in 1:LOTS){
       i<-ij[,1]
       j<-ij[,2]
       increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
-                    sigma2=exp(theta[3]),tau2=exp(theta[4]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+                    sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=exp(theta[4]),tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
       sum(increment)/T
    }
    H_WPL[,,i]=hessian(wpl, rc[[1]])
@@ -937,7 +942,7 @@ for(i in 1:LOTS){
       i<-ij[,1]
       j<-ij[,2]
       increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
-                    sigma2=exp(theta[3]),tau2=exp(theta[4]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+                    sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
       sum(increment)/T
    }
    His_WPL[, , i]=hessian(wplis, rcis[[1]])
