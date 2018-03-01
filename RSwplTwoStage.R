@@ -769,11 +769,15 @@ for(i in 1:LOTS){
    
    cat(i)
    ##Population data
-   population$u<-rnorm(T,s=sqrt(truetau2))[population$cluster]
+   re=mvrnorm(n=T, mu = c(0,0), Sigma = PairCov) #generate vector of random effect (a, b)
+   population$a<-re[,1][population$cluster]
+   population$b<-re[,2][population$cluster]
+   
    population$x<-rnorm(N1*N2)+rnorm(T)[population$cluster]
-   population$y<-with(population, truebeta1+truebeta2*x+u+rnorm(N1*N2,s=sqrt(truesigma2)))
+   population$y<-with(population, truebeta1+a+truebeta2*x+b*x+rnorm(N1*N2,s=sqrt(truesigma2)))
    population$r=with(population, x*(y-truebeta1-truebeta2*x))
    population$ID_unit=with(population, 1:(N1*N2))
+   
    
    ##uninformative two-stage  sampling design (First-stage: SRSWOR, Second-stage: SRSWOR) and extracts the observed data
    ##first-stage
@@ -830,11 +834,16 @@ for(i in 1:LOTS){
    
    #PL (uninformative sampling)
    Fit_PL[i,1:2]<-rb$par[1:2]-truevalue[1:2]
-   Fit_PL[i,3:4]<-exp(rb$par[3:6])-truevalue[3:6] #reparametrize by taking exponential 
+   Fit_PL[i,3:4]<-exp(rb$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fit_PL[i,5]<-rb$par[5]-truevalue[5]
+   Fit_PL[i,6]<-exp(rb$par[6])-truevalue[6] #reparametrize by taking exponential 
    
    #WPL (uniformative sampling)
    Fit_WPL[i,1:2]<-rc$par[1:2]-truevalue[1:2]
-   Fit_WPL[i,3:4]<-exp(rc$par[3:6])-truevalue[3:6] #reparametrize by taking exponential 
+   Fit_WPL[i,3:4]<-exp(rc$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fit_WPL[i,5]<-rc$par[5]-truevalue[6]
+   Fit_WPL[i,6]<-exp(rc$par[6])-truevalue[6]
+   
    
    #NML (informative sampling)
    Fitis_NML[i,1:2]<-fixef(rais)-truevalue[1:2]
@@ -844,11 +853,14 @@ for(i in 1:LOTS){
    #PL (informative sampling)
    Fitis_PL[i,1:2]<-rbis$par[1:2]-truevalue[1:2]
    Fitis_PL[i,3:4]<-exp(rbis$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fitis_PL[i,5]<-rbis$par[5]-truevalue[5]
+   Fitis_PL[i,6]<-exp(rbis$par[6])-truevalue[6] 
    
    #WPLE (informative sampling)
    Fitis_WPL[i,1:2]<-rcis$par[1:2]-truevalue[1:2]
    Fitis_WPL[i,3:4]<-exp(rcis$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
-   
+   Fitis_WPL[i,5]<-rcis$par[5]-truevalue[5]
+   Fitis_WPL[i,6]<-exp(rcis$par[6])-truevalue[6]
    
    #Calculate Hessian matrix H for PL (bread for uninformative sampling design)
    pl=function(theta,y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x){
@@ -912,7 +924,7 @@ for(i in 1:LOTS){
       i<-ij[,1]
       j<-ij[,2]
       increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
-                    sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=exp(theta[4]),tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+                    sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
       sum(increment)/T
    }
    H_WPL[,,i]=hessian(wpl, rc[[1]])
