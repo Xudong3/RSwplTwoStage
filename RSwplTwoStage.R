@@ -103,8 +103,16 @@ TwostageSRSWORSampleis=FirststageSRSWORSample[c(which(SecondstageSRSWORis==1)), 
 library(lme4)
 
 ##Census estimator 
-lmer(y~(1+x|cluster)+x,data=population)
+fit_NML=lmer(y~(1+x|cluster)+x,data=population)
 
+### get the fixed effect for alpha and beta 
+fixef(fit_NML)
+
+### get the sigma2 for the error term 
+sigma(fit_NML)^2
+
+### get the variance for the random effect \tau2_11, \tau_12, \tau2_22  
+VarCorr(fit_NML)$cluster[c(1, 2,4)] # this is the variance not standard deviation
 
 ##uninformative two-stage sampling design (SRSWOR)
 lmer(y~(1+x|cluster)+x,data=TwostageSRSWORSample)
@@ -816,7 +824,8 @@ for(i in 1:LOTS){
                                                                                               log(truevalue[6])))
    rc<-fit_WPL(y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x,
                pos=TwostageSRSWORSample$ID_unit, sc=TwostageSRSWORSample$PSU, n1, N1, n2infor=FirststageSRSWOR*n2, N2, 
-               pars=c(truevalue[1:2], log(truevalue[3:6])))
+               pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                      log(truevalue[6])))
    
    #NML, PL and WPL (informative sampling)
    rais<-lmer(y~(1+x|cluster)+x,data=TwostageSRSWORSampleis)
@@ -830,7 +839,7 @@ for(i in 1:LOTS){
    #NML (uniformative sampling)
    Fit_NML[i,1:2]<-fixef(ra)-truevalue[1:2]
    Fit_NML[i,3]<-sigma(ra)^2-truevalue[3]
-   Fit_NML[i,4]<-as.numeric(VarCorr(ra))-truevalue[4]
+   Fit_NML[i,4:6]<-VarCorr(ra)$cluster[c(1,2,4)]-truevalue[4:6]
    
    #PL (uninformative sampling)
    Fit_PL[i,1:2]<-rb$par[1:2]-truevalue[1:2]
@@ -848,7 +857,7 @@ for(i in 1:LOTS){
    #NML (informative sampling)
    Fitis_NML[i,1:2]<-fixef(rais)-truevalue[1:2]
    Fitis_NML[i,3]<-sigma(rais)^2-truevalue[3]
-   Fitis_NML[i,4]<-as.numeric(VarCorr(rais))-truevalue[4]
+   Fitis_NML[i,4:6]<-VarCorr(rais)$cluster[c(1,2,4)]-truevalue[4:6]
    
    #PL (informative sampling)
    Fitis_PL[i,1:2]<-rbis$par[1:2]-truevalue[1:2]
@@ -886,7 +895,8 @@ for(i in 1:LOTS){
    
    #Pairwise score function PL (uninformative sampling)
    PS_PL[i, ]<- pairscore_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x,
-                             theta=c(truevalue[1:2], log(truevalue[3:4])))
+                             theta=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                     log(truevalue[6])))
    
    #Calculate Hessian matrix H for PL (bread for informative sampling design)
    plis=function (theta, y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x){
@@ -911,7 +921,8 @@ for(i in 1:LOTS){
    
    #Pairwise score function PL (informative sampling)
    PSis_PL[i, ]<- pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x,
-                               theta=c(truevalue[1:2], log(truevalue[3:4])))
+                               theta=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                       log(truevalue[6])))
    
    #Calculate Hessian matrix H for WPL (bread for uninformative sampling design)
    wpl=function (theta, y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,x=TwostageSRSWORSample$x,
