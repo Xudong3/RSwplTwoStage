@@ -1,5 +1,4 @@
 
-
 #setting: notation
 N1=80 ## number of sampling cluster in the first stage (population level) 
 N2=80 ##number of elements in each sampling cluster (population level)
