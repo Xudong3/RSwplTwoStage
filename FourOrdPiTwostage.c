@@ -2,7 +2,6 @@
 
 
 double FouOrdPiInternal(int pos1, int pos2, int pos3, int pos4, int sc1, int sc2,int sc3, int sc4, double n1, double N1, double n2infor[],double N2){
-
    if (sc1==sc2 & sc2==sc3 & sc3==sc4){
       if (pos1==pos2 & pos2==pos3 & pos3==pos4){
 	return n2infor[sc1]/N2*(n1/N1);

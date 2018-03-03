@@ -321,7 +321,6 @@ pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster, TwostageS
 
 dyn.load("FourOrdPiTwostage.so")
 
-
 # second-order inclusion probability
 C2<-function(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2){
    .C("SecOrdPi",as.integer(pos1), as.integer(pos2),as.integer(sc1), as.integer(sc2), as.double(n1), as.double(N1), as.double(n2infor),as.double(N2),length(pos1),rval=numeric(length(pos1)))$rval
