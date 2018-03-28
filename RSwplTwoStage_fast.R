@@ -1,0 +1,1154 @@
+
+#setting: notation
+N1=100 ## number of sampling cluster in the first stage (population level)
+N2=100 ##number of elements in each sampling cluster (population level)
+latitude<-1:N2
+longitude<-1:N1
+population<-expand.grid(lat=latitude,long=longitude)
+population$PSU<-population$long
+overlap=ceiling(N2*3/4)
+
+
+model_cluster<-function(population, overlap){
+   population$cluster<-numeric(nrow(population))
+   
+   id<-ifelse(population$lat<=overlap, 
+              population$long, 
+              ((population$long+population$lat-overlap) %% N1)+1
+   )
+   population$cluster<-id
+   population	
+}
+
+population<-model_cluster(population, overlap)
+T=length(unique(population$cluster))
+
+##check
+table(population$cluster==population$strata)
+table(table(population$cluster))
+table(table(population$strata))
+
+#Model: parameter from random slope model  model
+truebeta1=1
+truebeta2=3
+truesigma2=4
+truetau2_11=2
+truetau_12=0.8
+truetau2_22=1
+PairCov<-matrix(c(truetau2_11, truetau_12, truetau_12, truetau2_22), nrow=2, byrow=T)
+det(PairCov)
+###check positive definite 
+#install.packages("matrixcalc")
+library("matrixcalc")
+is.positive.definite(PairCov)
+
+truevalue<-c(truebeta1,truebeta2, truesigma2, truetau2_11, truetau_12, truetau2_22)
+names(truevalue)<-c("beta1", "beta2", "sigma2", "tau2_11", "tau_12", "tau2_22")
+
+##Population data
+#install.packages("MASS")
+library("MASS")
+#install.packages("rockchalk")
+library(rockchalk)
+re=mvrnorm(n=T, mu = c(0,0), Sigma = PairCov) #generate vector of random effect (a, b)
+population$a<-re[,1][population$cluster]
+population$b<-re[,2][population$cluster]
+
+population$x<-rnorm(N1*N2)+rnorm(T)[population$cluster]
+population$y<-with(population, truebeta1+a+truebeta2*x+b*x+rnorm(N1*N2,s=sqrt(truesigma2)))
+population$r=with(population, x*(y-truebeta1-truebeta2*x))
+population$ID_unit=with(population, 1:(N1*N2))
+
+#uninformative two-stage sampling design (first-stage: SRSWOR, Second-stage:SRSWOR)
+n1=ceiling(N1/10) ##number of sampling cluster in the first stage (sample level)
+n2=ceiling(N2/10) ##umber of elements in each sampling cluster ( sample level)
+
+# Using sampling package for two-stage sampling (First-stage: SRSWOR, Second-stage: SRSWOR ) 
+#install.packages("sampling")
+library("sampling")
+
+##uninformative two-stage  sampling design (First-stage: SRSWOR, Second-stage: SRSWOR) and extracts the observed data
+##first-stage
+FirststageSRSWOR=srswor(n1, N1)
+FirststageSRSWORSample=subset(population, population$PSU%in% which(FirststageSRSWOR==1))
+
+#second-stage
+SecondstageSRSWOR=unlist(lapply(rep(n2,n1), function(v) return(srswor(v, N2))))
+TwostageSRSWORSample<-FirststageSRSWORSample[c(which(SecondstageSRSWOR==1)),] 
+
+#informative two-stage sampling design (first-stage: SRSWOR, Second-stage:SRSWOR)
+##number of elements in each sampling cluster
+param=c(0.05, 3.5)
+
+n2informative= function(r, sc, param, N2){
+   a=rep(NA, length=length(unique(population$sc)))
+   b=rep(NA, length=length(unique(population$sc)))
+   for (i in unique(sc)){
+      a[i]=mean(r[sc==i])
+      b[i]=2*ceiling((param[1]*exp(-param[2]*a[i]))/(1 +param[1]*exp(-param[2]*a[i]))*N2/2)
+   }
+   b
+}
+
+##informative two-stage  sampling design (SRSWOR)[second-stage is informative] and extracts the observed data
+###second-stage
+n2pop=n2informative(population$r,population$PSU, param ,N2)
+n2is=n2pop*FirststageSRSWOR
+SecondstageSRSWORis=unlist(lapply(n2is[c(which(n2is!=0))], function(v) return(srswor(v, N2))))
+TwostageSRSWORSampleis=FirststageSRSWORSample[c(which(SecondstageSRSWORis==1)), ]
+
+# Estimation: full-likelihood
+#install.packages("lme4")
+library(lme4)
+
+##Census estimator 
+fit_NML=lmer(y~(1+x|cluster)+x,data=population)
+
+### get the fixed effect for alpha and beta 
+fixef(fit_NML)
+
+### get the sigma2 for the error term 
+sigma(fit_NML)^2
+
+### get the variance for the random effect \tau2_11, \tau_12, \tau2_22  
+VarCorr(fit_NML)$cluster[c(1, 2,4)] # this is the variance not standard deviation
+
+##uninformative two-stage sampling design (SRSWOR)
+lmer(y~(1+x|cluster)+x,data=TwostageSRSWORSample)
+
+##informative two-stage sampling design (SRSWOR)
+lmer(y~(1+x|cluster)+x,data=TwostageSRSWORSampleis)
+
+# Estimation: pairwise likelihood (without weight)
+l2<-function(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2, tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+(x1^2)*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+(x2^2)*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   -log(det)/2-(1/2)*(1/det)*(r1^2*pc22-2*r1*r2*pc12+r2^2*pc11)
+}	
+
+
+dalpha<-function(y1,y2, g1,g2, x1,x2,alpha,beta, sigma2,tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+x1^2*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+x2^2*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   dr1<- -1
+   dr2<- -1
+   
+
+   (-1/2)*(1/det)*(2*r1*dr1*pc22-2*dr1*r2*pc12-2*r1*dr2*pc12+2*r2*dr2*pc11 )
+   }
+
+dbeta<-function(y1,y2, g1,g2, x1,x2,alpha,beta, sigma2,tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+x1^2*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+x2^2*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   dr1<- -x1
+   dr2<- -x2
+   
+   (-1/2)*(1/det)*(2*r1*dr1*pc22-2*dr1*r2*pc12-2*r1*dr2*pc12+2*r2*dr2*pc11)
+}	
+
+dsigma2<-function(y1,y2, g1,g2, x1,x2,alpha, beta, sigma2,tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+x1^2*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+x2^2*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   dpc11<-1
+   dpc22<-1
+   dpc12<-0
+   
+   ddet<-dpc11*pc22+pc11*dpc22-2*pc12*dpc12
+   
+   (-1/2)*(ddet/det)-1/2*(-ddet)/(det)^2*(r1^2*pc22-2*r1*r2*pc12+r2^2*pc11)-1/2*1/det*(r1^2*dpc22-2*r1*r2*dpc12+r2^2*dpc11)
+}
+
+dtau2_11<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+x1^2*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+x2^2*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   dpc11<-1
+   dpc22<-1
+   dpc12<-ifelse(g1==g2, 1, 0)
+   ddet<- dpc11*pc22+pc11*dpc22-2*pc12*dpc12
+   
+   
+   (-1/2)*(ddet/det)-1/2*(-ddet)/(det^2)*(r1^2*pc22-2*r1*r2*pc12+r2^2*pc11)-1/2*1/det*(r1^2*dpc22-2*r1*r2*dpc12+r2^2*dpc11)
+}	
+
+
+dtau_12<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+x1^2*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+x2^2*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   dpc11<-2*x1
+   dpc22<-2*x2
+   dpc12<-ifelse(g1==g2,x1+x2, 0)
+   ddet<- dpc11*pc22+pc11*dpc22-2*pc12*dpc12
+   
+   -1/2*ddet/det-1/2*(-ddet)/(det^2)*(r1^2*pc22-2*r1*r2*pc12+r2^2*pc11)-1/2*1/det*(r1^2*dpc22-2*r1*r2*dpc12+r2^2*dpc11)
+ }
+
+dtau2_22<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2_11, tau_12, tau2_22){
+   pc11<-tau2_11+2*x1*tau_12+x1^2*tau2_22+sigma2 #pairwise covariance for 11
+   pc22<-tau2_11+2*x2*tau_12+x2^2*tau2_22+sigma2 #pairwise covariance for 22
+   pc12<-ifelse(g1==g2, tau2_11+x1*tau_12+x2*tau_12+x1*x2*tau2_22, 0) #pairwise covariance for 12
+   
+   r1<-y1-alpha-beta*x1
+   r2<-y2-alpha-beta*x2
+   
+   det<-pc11*pc22-pc12^2
+   
+   dpc11<-x1^2
+   dpc22<-x2^2
+   dpc12<-ifelse(g1==g2, x1*x2, 0 )
+   ddet<- dpc11*pc22+pc11*dpc22-2*pc12*dpc12
+   
+   -1/2*ddet/det-1/2*(-ddet)/(det^2)*(r1^2*pc22-2*r1*r2*pc12+r2^2*pc11)-1/2*1/det*(r1^2*dpc22-2*r1*r2*dpc12+r2^2*dpc11)
+   }
+
+#optimization problem for PL (without weight)
+fit_PL<-function(y,g,x, pars){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   
+   func1<-function(theta){
+      increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                   sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      sum(increment)/T
+   }
+   gr<-function(theta){
+      incrementda=dalpha(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                         sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      incrementdb=dbeta(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],
+                        sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      incrementds=exp(theta[3])*dsigma2(y[i],y[j],g[i],g[j],x[i],x[j],
+                                        alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),tau2_11=exp(theta[4]), 
+                                        tau_12=theta[5], tau2_22=exp(theta[6]))
+      incrementdt_11=exp(theta[4])*dtau2_11(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                      sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      incrementdt_12=dtau_12(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                         sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      incrementdt_22=exp(theta[6])*dtau2_22(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                            sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      c(sum(incrementda), sum(incrementdb), sum(incrementds), sum(incrementdt_11), sum(incrementdt_12), sum(incrementdt_22))/T
+   }
+   optim(pars,func1, gr, method="BFGS",control=list(fnscale=-1,parscale=c(1/n,1/n,1/n,1/n, 1/n, 1/n)))
+}
+
+
+##Find the PML (without weight)
+###uninformative
+estimator_PL<-fit_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x, pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                                          log(truevalue[6])))
+estimator_PL
+
+
+###informative sampling
+estimatoris_PL<- fit_PL(y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x, pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                                                         log(truevalue[6])))
+estimatoris_PL
+
+##Define the pairwise score function and checking the pairwise score at PML (without weight)
+pairscore_PL<-function(y,g,x, theta){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   
+   incrementda=dalpha(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                      sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   incrementdb=dbeta(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],
+                     sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   incrementds=exp(theta[3])*dsigma2(y[i],y[j],g[i],g[j],x[i],x[j],
+                                     alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],
+                                     tau2_22=exp(theta[6]))
+   incrementdt_11=exp(theta[4])*dtau2_11(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                         sigma2=exp(theta[3]), tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   incrementdt_12=dtau_12(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                         sigma2=exp(theta[3]), tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   incrementdt_22=exp(theta[6])*dtau2_22(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                         sigma2=exp(theta[3]), tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   c(sum(incrementda), sum(incrementdb), sum(incrementds), sum(incrementdt_11),  sum(incrementdt_12),  sum(incrementdt_22))/T
+}
+
+##uninformative sampling (without weight)
+pairscore_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x,estimator_PL[[1]])
+##informative sampling (without weight)
+pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster, TwostageSRSWORSampleis$x,estimatoris_PL[[1]])
+
+
+dyn.load("FourOrdPiTwostage.so")
+
+# second-order inclusion probability
+C2<-function(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2){
+   .C("SecOrdPi",as.integer(pos1), as.integer(pos2),as.integer(sc1), as.integer(sc2), as.double(n1), as.double(N1), as.double(n2infor),as.double(N2),length(pos1),rval=numeric(length(pos1)))$rval
+}
+
+
+# fourth-order inclusion probability
+C4<-function(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,n1, N1, n2infor,N2){
+   .C("FourOrdPi",as.integer(pos1), as.integer(pos2),as.integer(pos3), as.integer(pos4),as.integer(sc1), as.integer(sc2),
+      as.integer(sc3), as.integer(sc4), as.double(n1), as.double(N1), as.double(n2infor),as.double(N2),length(pos1),rval=numeric(length(pos1)))$rval	
+   
+}
+
+
+##Define the second-order inclusion probability
+SecOrdPi<-function(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2){
+   #pi<-SecOrdPiInternal(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2)	
+   Cpi<-C2(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2)
+   #if ((pi-Cpi)/(pi+Cpi)>1e-10) stop(paste(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,":",pi,Cpi,sep=","))
+   Cpi
+}
+
+
+
+##Define the  fourth-order inclusion probability
+FouOrdPi<-function(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,n1, N1, n2infor,N2){
+   #pi<-FouOrdPiInternal(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,n2infor,N2)	
+   Cpi<-C4(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,n1, N1, n2infor,N2)
+   #if ((pi-Cpi)/(pi+Cpi)>1e-10) stop(paste(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,":",pi,Cpi,sep=","))
+   Cpi
+}
+
+
+
+
+#Define the fourth-order Delta
+FouOrdDel=function(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,n1, N1, n2infor, N2){
+   FouOrdPi(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4, n1, N1, n2infor,N2)-
+      SecOrdPi(pos1, pos2,sc1, sc2, n1, N1, n2infor,N2)*
+      SecOrdPi(pos3, pos4,sc3, sc4, n1, N1, n2infor,N2)
+}
+
+# Estimation: weighted pairwise likeliood 
+wl2<-function(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2,  tau2_11,tau_12, tau2_22, pos1, pos2,sc1, sc2, n1, N1,  n2infor,N2){
+   1/SecOrdPi(pos1, pos2,sc1, sc2, n1, N1,  n2infor, N2)*
+      (l2(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2,  tau2_11,tau_12, tau2_22))
+}	
+
+
+#wdalpha<-function(y1,y2, g1,g2, x1,x2,alpha,beta, sigma2, tau2_11,tau_12, tau2_22, pos1, pos2,sc1, sc2,n1, N1,  n2infor,N2){
+#   1/SecOrdPi(pos1, pos2,sc1, sc2, n1, N1,  n2infor,N2)*
+#      (dalpha(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2,  tau2_11,tau_12, tau2_22))
+#}	
+
+#wdbeta<-function(y1,y2, g1,g2, x1,x2,alpha,beta, sigma2, tau2_11,tau_12, tau2_22, pos1, pos2,sc1, sc2,n1, N1,  n2infor,N2){
+#   1/SecOrdPi(pos1, pos2,sc1, sc2, n1, N1,  n2infor, N2)*
+#      (dbeta(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2,  tau2_11,tau_12, tau2_22))
+#}	
+
+
+#wdsigma2<-function(y1,y2, g1,g2, x1,x2,alpha, beta, sigma2,tau2_11,tau_12, tau2_22, pos1, pos2,sc1, sc2, n1, N1,  n2infor,N2){
+#   1/SecOrdPi(pos1, pos2,sc1, sc2, n1, N1,  n2infor,N2)*
+#      (dsigma2(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2, tau2_11,tau_12, tau2_22))
+#}	
+
+#wdtau2_11<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2, tau2_11,tau_12, tau2_22, pos1, pos2,sc1, sc2,n1, N1,  n2infor,N2) {
+#   1/SecOrdPi(pos1, pos2,sc1, sc2, n1, N1,  n2infor,N2)*
+#      (dtau2_11(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2,  tau2_11,tau_12, tau2_22))
+#}
+
+
+#wdtau_12<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2_11,tau_12, tau2_22,  pos1, pos2,sc1, sc2,n1, N1, n2infor,N2) {
+#   1/SecOrdPi(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2)*
+#      (dtau_12(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2, tau2_11, tau_12, tau2_22))
+#}
+
+#wdtau2_22<-function(y1,y2, g1,g2, x1,x2,alpha, beta,sigma2,tau2_11,tau_12, tau2_22,  pos1, pos2,sc1, sc2,n1, N1, n2infor,N2) {
+#   1/SecOrdPi(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2)*
+#      (dtau2_22(y1,y2, g1,g2, x1,x2, alpha, beta, sigma2, tau2_11, tau_12, tau2_22))
+#}
+
+
+#optimization (WPL)
+fit_WPL<-function(y,g,x, pos, sc,n1, N1, n2infor, N2,  pars){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   
+   func1<-function(theta){
+      wincrement=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                     sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]),
+                     pos[i], pos[j], sc[i], sc[j],n1, N1, n2infor,N2)
+      sum(wincrement)/T
+   }
+   gr<-function(theta){
+      wij<-1/SecOrdPi(pos[i], pos[j],sc[i], sc[j], n1, N1,  n2infor,N2)
+      wincrementda=wij*dalpha(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                           sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+      wincrementdb=wij*dbeta(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],
+                          sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+      wincrementds=exp(theta[3])*wij*dsigma2(y[i],y[j],g[i],g[j],x[i],x[j],
+                                          alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], 
+                                          tau2_22=exp(theta[6]))
+      wincrementdt_11=exp(theta[4])*wij*dtau2_11(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+      wincrementdt_12=wij*dtau_12(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+      wincrementdt_22=exp(theta[6])*wij*dtau2_22(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+      c(sum(wincrementda), sum(wincrementdb), sum(wincrementds), sum(wincrementdt_11), sum(wincrementdt_12), sum(wincrementdt_22))/T
+   }
+   optim(pars,func1,gr,  method="BFGS",control=list(fnscale=-1,parscale=c(1/n,1/n,1/n,1/n, 1/n, 1/n)))
+}
+
+##Find the WPML
+###Uninformative sampling (with weight )
+estimator_WPL<- fit_WPL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster,TwostageSRSWORSample$x, TwostageSRSWORSample$ID_unit, 
+                       TwostageSRSWORSample$PSU, n1, N1,n2infor=rep(n2,N1), N2, pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], log(truevalue[6])))   
+estimator_WPL                                                              
+###informative sampling (with weight)
+estimatoris_WPL<- fit_WPL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x, TwostageSRSWORSampleis$ID_unit, 
+                         TwostageSRSWORSampleis$PSU,n1, N1,n2infor=n2is, N2,  pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                     log(truevalue[6])))
+
+estimatoris_WPL
+
+
+
+##Define the  pairwise score function and check the value of pairwise score function at WPML
+pairscore_WPL<-function(y,g,x, theta, pos, sc, n1, N1,n2infor, N2){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   
+   wij<-1/SecOrdPi(pos[i], pos[j],sc[i], sc[j], n1, N1,  n2infor,N2)
+   wincrementda=wij*dalpha(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                        sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   wincrementdb=wij*dbeta(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],
+                       sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   wincrementds=exp(theta[3])*wij*dsigma2(y[i],y[j],g[i],g[j],x[i],x[j],
+                                       alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   wincrementdt_11=exp(theta[4])*wij*dtau2_11(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                           sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   wincrementdt_12=wij*dtau_12(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                           sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   wincrementdt_22=exp(theta[6])*wij*dtau2_22(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                                           sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5], tau2_22=exp(theta[6]))
+   c(sum(wincrementda), sum(wincrementdb), sum(wincrementds), sum(wincrementdt_11), sum(wincrementdt_12), sum(wincrementdt_22))/T
+   
+}
+
+##uniformative sampling (with weight)
+pairscore_WPL(y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x, theta=estimator_WPL[[1]],
+                pos=TwostageSRSWORSample$ID_unit, TwostageSRSWORSample$PSU, n1, N1,  n2infor=rep(n2, N1),N2)
+##informative sampling (with weight)
+pairscore_WPL(y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x, theta=estimatoris_WPL[[1]],
+                pos=TwostageSRSWORSampleis$ID_unit, TwostageSRSWORSampleis$PSU, n1, N1, n2infor=n2is,N2 )
+
+#variance estimation for PL under stratified SRSWORS
+#define the pairwise likelihood (without weight)
+#install.packages("numDeriv")
+library("numDeriv")
+
+#uninformative 
+#Calculate Hessian matrix H for PL (bread for uninformative sampling design)
+pl=function(theta,y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]))
+   sum(increment)/T
+}
+estH_PL=hessian(pl, estimator_PL[[1]])
+
+#Calculate  variance matrix J  for PL (meat for uninformative sampling design)
+fast_J_PL<-function(y,g,x,pos, sc,n1, N1, n2infor,N2, theta){
+   n<-length(y)
+   sum=0
+   
+   kl<-expand.grid(1:n,1:n)
+   kl<-kl[kl[,1]<kl[,2],]
+   kl<-kl[g[kl[,1]]==g[kl[,2,]],]
+   k<-kl[,1]
+   l<-kl[,2]
+   
+   for (i in 1:(n-1)){
+      cat(i)
+      js <- (i+1):n
+      js <- js[g[js] %in% g[i]]
+      for(j in js){
+         cat(".")
+         incrementdaij=dalpha(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                              tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdbij=dbeta(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                             tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdsij=exp(theta[3])*dsigma2(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],
+                                             sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_11ij=exp(theta[4])*dtau2_11(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                                                 tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_12ij=dtau_12(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                                                 tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_22ij=exp(theta[6])*dtau2_22(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                                                 tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         psij=c(incrementdaij, incrementdbij, incrementdsij, incrementdt_11ij, incrementdt_12ij, incrementdt_22ij)
+         
+         ## k,l vectorised: probably can't afford memory to do that for ijkl 
+         ii <-rep(i, length(k))
+         jj<-rep(j,length(k))
+         incrementdakl=dalpha(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdbkl=dbeta(y[k],y[l],g[k],g[l],x[k],x[l],alpha=theta[1],beta=theta[2],
+                             sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdskl=exp(theta[3])*dsigma2(y[k],y[l],g[k],g[l],x[k],x[l],alpha=theta[1],beta=theta[2],
+                                             sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_11kl=exp(theta[4])*dtau2_11(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                                           sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_12kl=dtau_12(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_22kl=exp(theta[6])*dtau2_22(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         pskl=cbind(incrementdakl, incrementdbkl, incrementdskl, incrementdt_11kl, incrementdt_12kl, incrementdt_22kl)
+         sumpskl<-colSums( FouOrdDel(pos[ii], pos[jj], pos[k], pos[l], sc[ii], sc[jj], sc[k], sc[l],n1, N1,n2infor,N2)* pskl)
+         psijkl<-tcrossprod(psij,sumpskl)
+         sum=sum+psijkl
+      }
+   }
+   rval<-sum/(T^2)
+   ##attr(rval, "pairs")<-keep ##debug
+   rval
+}
+
+estJ_PL=fast_J_PL(y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x,
+                  pos=TwostageSRSWORSample$ID_unit, sc=TwostageSRSWORSample$PSU,n1,N1,
+                  n2infor=FirststageSRSWOR*n2, N2, theta=estimator_PL[[1]] )
+
+#sanwich estimator (uninformative sampling )
+sanestimator_PL= solve(estH_PL)%*% estJ_PL%*% solve(t(estH_PL))
+
+
+#Informative
+#Calculate Hessian matrix H for PL (bread for informative sampling design)
+plis=function (theta, y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+   sum(increment)/T
+}
+estHis_PL=hessian(plis, estimatoris_PL[[1]])
+
+#Calculate  variance matrix J  for PL (meat for informative sampling design)
+estJis_PL=fast_J_PL(y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,x=TwostageSRSWORSampleis$x,pos=TwostageSRSWORSampleis$ID_unit,  
+                    sc=TwostageSRSWORSampleis$PSU, n1, N1,   n2infor=n2is, N2, theta=estimatoris_PL[[1]] )
+#sanwich estimator (informative sampling )
+sanestimatoris_PL = solve(estHis_PL)%*% estJis_PL%*% t(solve(estHis_PL))
+
+
+#variance estimation for WPL under two-stage SRSWORS
+##define H as in page 96 of my thesis as \hat{H}(\est)
+#define weighted pairwise likelihood WPL 
+
+##uninformative sampling
+wpl=function (theta, y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,x=TwostageSRSWORSample$x,
+              pos=TwostageSRSWORSample$ID_unit, sc=TwostageSRSWORSample$PSU, n1= sum(FirststageSRSWOR*n2!=0), N1=length(unique(population$PSU)), 
+              n2infor=FirststageSRSWOR*n2 , N2=length(unique(population$lat)) ){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                 sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+   sum(increment)/T
+}
+estH_WPL=hessian(wpl, estimator_WPL[[1]])
+estH_WPL
+
+##define \hat{J}(\theta) as in page 97 of my thesis and  evaluate at the WPLE
+fast_J_WPL<-function(y,g,x,  pos,  sc, n1, N1, n2infor,N2, theta){
+   n<-length(y)
+   sum=0
+   
+   kl<-expand.grid(1:n,1:n)
+   kl<-kl[kl[,1]<kl[,2],]
+   kl<-kl[g[kl[,1]]==g[kl[,2,]],]
+   k<-kl[,1]
+   l<-kl[,2]
+   
+   for (i in 1:(n-1)){
+      cat(i)
+      js <- (i+1):n
+      js <- js[g[js] %in% g[i]]
+      for(j in js){
+         cat(".")
+         wij<-1/SecOrdPi(pos[i], pos[j],sc[i], sc[j], n1, N1,  n2infor,N2)
+         incrementdaij=wij*dalpha(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                               tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdbij=wij*dbeta(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                              tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdsij=exp(theta[3])*wij*dsigma2(y[i],y[j],g[i],g[j],x[i],x[j],alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_11ij=exp(theta[4])*wij*dtau2_11(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                                                  tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_12ij=wij*dtau_12(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                                                  tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_22ij=exp(theta[6])*wij*dtau2_22(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],sigma2=exp(theta[3]),
+                                                  tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         
+         
+         wpsij=c(incrementdaij, incrementdbij, incrementdsij, incrementdt_11ij, incrementdt_12ij, incrementdt_22ij)
+         
+         ## k,l vectorised: probably can't afford memory to do that for ijkl 
+         ii <-rep(i, length(k))
+         jj<-rep(j,length(k))
+         wkl<-1/SecOrdPi(pos[k], pos[l],sc[k], sc[l], n1, N1,  n2infor,N2)
+         incrementdakl=wkl*dalpha(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                               sigma2=exp(theta[3]), tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdbkl=wkl*dbeta(y[k],y[l],g[k],g[l],x[k],x[l],alpha=theta[1],beta=theta[2],
+                              sigma2=exp(theta[3]), tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdskl=exp(theta[3])*wkl*dsigma2(y[k],y[l],g[k],g[l],x[k],x[l],alpha=theta[1],beta=theta[2],
+                                              sigma2=exp(theta[3]), tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_11kl=exp(theta[4])*wkl*dtau2_11(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                                            sigma2=exp(theta[3]), tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_12kl=wkl*dtau_12(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                                                  sigma2=exp(theta[3]), tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         incrementdt_22kl=exp(theta[6])*wkl*dtau2_22(y[k],y[l],g[k],g[l],x[k],x[l], alpha=theta[1],beta=theta[2],
+                                                  sigma2=exp(theta[3]), tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+         wpskl=cbind(incrementdakl, incrementdbkl, incrementdskl, incrementdt_11kl, incrementdt_12kl, incrementdt_22kl)
+         sumwpskl<-colSums( (1/FouOrdPi( pos[ii], pos[jj], pos[k], pos[l], sc[ii], sc[jj], sc[k], sc[l], n1, N1,  n2infor,N2))*FouOrdDel(pos[ii], pos[jj], pos[k], pos[l], sc[ii], sc[jj], sc[k], sc[l],n1, N1,  n2infor,N2)* wpskl)
+         wpsijkl<-tcrossprod(wpsij,sumwpskl)
+         sum=sum+wpsijkl
+      }
+   }
+   rval<-sum/(T^2)
+   # attr(rval, "pairs")<-keep ##debug
+   rval
+}
+
+estJ_WPL=fast_J_WPL(y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,
+                    x=TwostageSRSWORSample$x, pos=TwostageSRSWORSample$ID_unit,  sc=TwostageSRSWORSample$PSU, n1, N1, 
+                    n2infor= FirststageSRSWOR*n2, N2, theta=estimator_WPL[[1]] )
+
+# sanwich estimator H^{-1}J (H^{-1})^\T
+##uninformaitve
+sanestimator_WPL= solve(estH_WPL)%*% estJ_WPL%*% t(solve(estH_WPL))
+
+
+##informative sampling
+wplis=function (theta, y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,x=TwostageSRSWORSampleis$x,
+                pos=TwostageSRSWORSampleis$ID_unit, sc=TwostageSRSWORSampleis$PSU, n1= sum(n2is!=0), N1=length(unique(population$PSU)), 
+                n2infor=n2is , N2=length(unique(population$lat)) ){
+   n<-length(y)
+   ij=expand.grid(1:n,1:n)
+   ij<-ij[ij[,1]<ij[,2],]
+   ij<-ij[g[ij[,1]]==g[ij[,2]],]
+   i<-ij[,1]
+   j<-ij[,2]
+   increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                 sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+   sum(increment)/T
+}
+estHis_WPL=hessian(wplis, estimatoris_WPL[[1]])
+estHis_WPL
+
+estJis_WPL=fast_J_WPL(y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,
+                      x=TwostageSRSWORSampleis$x, pos=TwostageSRSWORSampleis$ID_unit,  sc=TwostageSRSWORSampleis$PSU, n1, N1, 
+                      n2infor= n2is, N2, theta=estimatoris_WPL[[1]] )
+
+# sanwich estimator H^{-1}J (H^{-1})^\T
+##informaitve
+sanestimatoris_WPL= solve(estHis_WPL)%*% estJis_WPL%*% t(solve(estHis_WPL))
+
+
+#simulation
+
+LOTS=400
+#Fit from NML,PL, WPL for uninformative sampling
+Fit_NML<-matrix(0,nrow=LOTS,ncol=6)
+Fit_PL<-matrix(0,nrow=LOTS,ncol=6)
+Fit_WPL<-matrix(0,nrow=LOTS, ncol=6)
+
+#Fit from NML, PL, WPL for informative sampling
+Fitis_NML<-matrix(0,nrow=LOTS,ncol=6)
+Fitis_PL<-matrix(0,nrow=LOTS,ncol=6)
+Fitis_WPL<-matrix(0,nrow=LOTS, ncol=6)
+
+#Hessian matrix for PL(without weight) for uninformative sampling
+H_PL<-array(0, c(6,6, LOTS))
+
+#Hessian matrix for PL(without weight) for informative sampling
+His_PL<-array(0, c(6,6, LOTS))
+
+#Hessian matrix for WPL for uninformative sampling
+H_WPL<-array(0, c(6,6, LOTS))
+
+#Hessian matrix for WPL for informative sampling
+His_WPL<-array(0, c(6,6, LOTS))
+
+#Variance matrix J for PL for uninformative sampling
+J_PL<-array(0, c(6,6, LOTS))
+
+#Variance matrix J for PL for informative sampling
+Jis_PL<-array(0, c(6,6, LOTS))
+
+#Variance matrix J for WPL for uninformative sampling
+J_WPL<-array(0, c(6,6, LOTS))
+
+#Variance matrix J for WPL for informative sampling
+Jis_WPL<-array(0, c(6,6, LOTS))
+
+#Sanwich variance estimator for PL for uninformative sampling
+G_PL<-array(0, c(6,6, LOTS))
+
+#Sanwich variance estimator for PL for informative sampling
+Gis_PL<-array(0, c(6,6, LOTS))
+
+#Sanwich variance estimator for WPL for uninformative sampling
+G_WPL<-array(0, c(6,6, LOTS))
+
+#Sanwich variance estimator for WPL for informative sampling
+Gis_WPL<-array(0, c(6,6, LOTS))
+
+#Pairwise score function for PL for informative sampling 
+PS_PL<-matrix(0,nrow=LOTS,ncol=6)
+
+#Pairwise score function for PL for  informative sampling
+PSis_PL<-matrix(0,nrow=LOTS,ncol=6)
+
+#Pairwise score function for WPL for informative sampling 
+PS_WPL<-matrix(0,nrow=LOTS,ncol=6)
+
+#Pairwise score function for WPL for  informative sampling
+PSis_WPL<-matrix(0,nrow=LOTS,ncol=6)
+
+
+##Estimation: NML, PL and WPL 
+for(i in 1:LOTS){
+   
+   cat(i)
+   ##Population data
+   re=mvrnorm(n=T, mu = c(0,0), Sigma = PairCov) #generate vector of random effect (a, b)
+   population$a<-re[,1][population$cluster]
+   population$b<-re[,2][population$cluster]
+   
+   population$x<-rnorm(N1*N2)+rnorm(T)[population$cluster]
+   population$y<-with(population, truebeta1+a+truebeta2*x+b*x+rnorm(N1*N2,s=sqrt(truesigma2)))
+   population$r=with(population, x*(y-truebeta1-truebeta2*x))
+   population$ID_unit=with(population, 1:(N1*N2))
+   
+   
+   ##uninformative two-stage  sampling design (First-stage: SRSWOR, Second-stage: SRSWOR) and extracts the observed data
+   ##first-stage
+   FirststageSRSWOR=srswor(n1, N1)
+   FirststageSRSWORSample=subset(population, population$PSU%in% which(FirststageSRSWOR==1))
+   
+   ##second-stage
+   SecondstageSRSWOR=unlist(lapply(rep(n2,n1), function(v) return(srswor(v, N2))))
+   TwostageSRSWORSample<-FirststageSRSWORSample[c(which(SecondstageSRSWOR==1)),] 
+   
+   #informative two-stage sampling design (first-stage: SRSWOR, Second-stage:SRSWOR)
+   ##number of elements in each sampling cluster
+   param=c(0.05, 3.5)
+   n2informative= function(r, sc, param, N2){
+      a=rep(NA, length=length(unique(population$sc)))
+      b=rep(NA, length=length(unique(population$sc)))
+      for (i in unique(sc)){
+         a[i]=mean(r[sc==i])
+         b[i]=2*ceiling((param[1]*exp(-param[2]*a[i]))/(1 +param[1]*exp(-param[2]*a[i]))*N2/2)
+      }
+      b
+   }
+   
+   ##informative two-stage  sampling design (SRSWOR)[second-stage is informative] and extracts the observed data
+   ###second-stage
+   n2pop=n2informative(population$r,population$PSU, param ,N2)
+   n2is=n2pop*FirststageSRSWOR
+   SecondstageSRSWORis=unlist(lapply(n2is[c(which(n2is!=0))], function(v) return(srswor(v, N2))))
+   TwostageSRSWORSampleis=FirststageSRSWORSample[c(which(SecondstageSRSWORis==1)), ]
+   
+   
+   
+   #NML, PL and WPL (uninformative sampling)
+   ra<-lmer(y~(1+x|cluster)+x,data=TwostageSRSWORSample)
+   rb<-fit_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x, c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                              log(truevalue[6])))
+   rc<-fit_WPL(y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x,
+               pos=TwostageSRSWORSample$ID_unit, sc=TwostageSRSWORSample$PSU, n1, N1, n2infor=FirststageSRSWOR*n2, N2, 
+               pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                      log(truevalue[6])))
+   
+   #NML, PL and WPL (informative sampling)
+   rais<-lmer(y~(1+x|cluster)+x,data=TwostageSRSWORSampleis)
+   rbis<-fit_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster, TwostageSRSWORSampleis$x, c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                                                                                      log(truevalue[6])))
+   rcis<-fit_WPL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x,
+                 TwostageSRSWORSampleis$ID_unit, TwostageSRSWORSampleis$PSU, n1, N1,  n2infor=n2is , N2,  
+                 pars=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                        log(truevalue[6])))
+   
+   #NML (uniformative sampling)
+   Fit_NML[i,1:2]<-fixef(ra)-truevalue[1:2]
+   Fit_NML[i,3]<-sigma(ra)^2-truevalue[3]
+   Fit_NML[i,4:6]<-VarCorr(ra)$cluster[c(1,2,4)]-truevalue[4:6]
+   
+   #PL (uninformative sampling)
+   Fit_PL[i,1:2]<-rb$par[1:2]-truevalue[1:2]
+   Fit_PL[i,3:4]<-exp(rb$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fit_PL[i,5]<-rb$par[5]-truevalue[5]
+   Fit_PL[i,6]<-exp(rb$par[6])-truevalue[6] #reparametrize by taking exponential 
+   
+   #WPL (uniformative sampling)
+   Fit_WPL[i,1:2]<-rc$par[1:2]-truevalue[1:2]
+   Fit_WPL[i,3:4]<-exp(rc$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fit_WPL[i,5]<-rc$par[5]-truevalue[6]
+   Fit_WPL[i,6]<-exp(rc$par[6])-truevalue[6]
+   
+   
+   #NML (informative sampling)
+   Fitis_NML[i,1:2]<-fixef(rais)-truevalue[1:2]
+   Fitis_NML[i,3]<-sigma(rais)^2-truevalue[3]
+   Fitis_NML[i,4:6]<-VarCorr(rais)$cluster[c(1,2,4)]-truevalue[4:6]
+   
+   #PL (informative sampling)
+   Fitis_PL[i,1:2]<-rbis$par[1:2]-truevalue[1:2]
+   Fitis_PL[i,3:4]<-exp(rbis$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fitis_PL[i,5]<-rbis$par[5]-truevalue[5]
+   Fitis_PL[i,6]<-exp(rbis$par[6])-truevalue[6] 
+   
+   #WPLE (informative sampling)
+   Fitis_WPL[i,1:2]<-rcis$par[1:2]-truevalue[1:2]
+   Fitis_WPL[i,3:4]<-exp(rcis$par[3:4])-truevalue[3:4] #reparametrize by taking exponential 
+   Fitis_WPL[i,5]<-rcis$par[5]-truevalue[5]
+   Fitis_WPL[i,6]<-exp(rcis$par[6])-truevalue[6]
+   
+   #Calculate Hessian matrix H for PL (bread for uninformative sampling design)
+   pl=function(theta,y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x){
+      n<-length(y)
+      ij=expand.grid(1:n,1:n)
+      ij<-ij[ij[,1]<ij[,2],]
+      ij<-ij[g[ij[,1]]==g[ij[,2]],]
+      i<-ij[,1]
+      j<-ij[,2]
+      increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                   sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]))
+      sum(increment)/T
+   }
+   H_PL[,,i]=hessian(pl, rb[[1]])
+   
+   #Calculate  variance matrix J  for PL (meat for uniformative sampling design)
+   J_PL[, , i]=fast_J_PL(y=TwostageSRSWORSample$y, g=TwostageSRSWORSample$cluster, x=TwostageSRSWORSample$x,
+                         pos=TwostageSRSWORSample$ID_unit, sc=TwostageSRSWORSample$PSU,n1,N1,
+                         n2infor=FirststageSRSWOR*n2, N2, theta=rb[[1]] )
+   
+   #sanwich estimator (uninformative sampling )
+   G_PL[, ,i] =  tryCatch(solve(H_PL[,,i])%*% J_PL[, , i]%*% t(solve(H_PL[,,i])),  error=function(e) matrix(NaN, 6,6))
+   
+   #Pairwise score function PL (uninformative sampling)
+   PS_PL[i, ]<- pairscore_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x,
+                             theta=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                     log(truevalue[6])))
+   
+   #Calculate Hessian matrix H for PL (bread for informative sampling design)
+   plis=function (theta, y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x){
+      n<-length(y)
+      ij=expand.grid(1:n,1:n)
+      ij<-ij[ij[,1]<ij[,2],]
+      ij<-ij[g[ij[,1]]==g[ij[,2]],]
+      i<-ij[,1]
+      j<-ij[,2]
+      increment=l2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                   sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]))
+      sum(increment)/T
+   }
+   His_PL[,,i]=hessian(plis, rbis[[1]])
+   
+   #Calculate  variance matrix J  for PL (meat for informative sampling design)
+   Jis_PL[, , i]=fast_J_PL(y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,x=TwostageSRSWORSampleis$x,pos=TwostageSRSWORSampleis$ID_unit,  
+                           sc=TwostageSRSWORSampleis$PSU, n1, N1,   n2infor=n2is,  N2, theta=rbis[[1]] )
+   
+   #sanwich estimator (informative sampling )
+   Gis_PL[, ,i] =  tryCatch(solve(His_PL[,,i])%*% Jis_PL[, , i]%*% t(solve(His_PL[,,i])), error=function(e) matrix(NaN, 6,6))
+   
+   #Pairwise score function PL (informative sampling)
+   PSis_PL[i, ]<- pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x,
+                               theta=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                       log(truevalue[6])))
+   
+   #Calculate Hessian matrix H for WPL (bread for uninformative sampling design)
+   wpl=function (theta, y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,x=TwostageSRSWORSample$x,
+                 pos=TwostageSRSWORSample$ID_unit, sc=TwostageSRSWORSample$PSU, n1= sum(FirststageSRSWOR*n2!=0), N1=length(unique(population$PSU)), 
+                 n2infor=FirststageSRSWOR*n2 , N2=length(unique(population$lat)) ){
+      n<-length(y)
+      ij=expand.grid(1:n,1:n)
+      ij<-ij[ij[,1]<ij[,2],]
+      ij<-ij[g[ij[,1]]==g[ij[,2]],]
+      i<-ij[,1]
+      j<-ij[,2]
+      increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                    sigma2=exp(theta[3]),tau2_11=exp(theta[4]),tau_12=theta[5],tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+      sum(increment)/T
+   }
+   H_WPL[,,i]=hessian(wpl, rc[[1]])
+   
+   #Calculate  variance matrix J  for WPL (meat for uniformative sampling design)
+   J_WPL[, , i]=fast_J_WPL(y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,
+                           x=TwostageSRSWORSample$x, pos=TwostageSRSWORSample$ID_unit,  sc=TwostageSRSWORSample$PSU, n1, N1, 
+                           n2infor= FirststageSRSWOR*n2, N2,  theta=rc[[1]] )
+   
+   #sanwich estimator (uninformative sampling )
+   G_WPL[, ,i] =  tryCatch(solve(H_WPL[,,i])%*% J_WPL[, , i]%*% t(solve(H_WPL[,,i])), error=function(e) matrix(NaN, 6,6))
+   
+   #Pairwise score function WPL (uninformative sampling)
+   PS_WPL[i, ]<- pairscore_WPL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x,
+                               theta=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                             log(truevalue[6])),  TwostageSRSWORSample$ID_unit, TwostageSRSWORSample$PSU, n1, N1, n2infor=FirststageSRSWOR*n2, N2)
+   
+   
+   #Calculate Hessian matrix H  for WPL (bread for informative sampling design)
+   ##informative sampling
+   wplis=function (theta, y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,x=TwostageSRSWORSampleis$x,
+                   pos=TwostageSRSWORSampleis$ID_unit, sc=TwostageSRSWORSampleis$PSU, n1= sum(n2is!=0), N1=length(unique(population$PSU)), 
+                   n2infor=n2is , N2=length(unique(population$lat)) ){
+      n<-length(y)
+      ij=expand.grid(1:n,1:n)
+      ij<-ij[ij[,1]<ij[,2],]
+      ij<-ij[g[ij[,1]]==g[ij[,2]],]
+      i<-ij[,1]
+      j<-ij[,2]
+      increment=wl2(y[i],y[j],g[i],g[j],x[i],x[j], alpha=theta[1],beta=theta[2],
+                    sigma2=exp(theta[3]),tau2_11=exp(theta[4]), tau_12=theta[5], tau2_22=exp(theta[6]), pos[i], pos[j], sc[i], sc[j], n1, N1,  n2infor,N2)
+      sum(increment)/T
+   }
+   His_WPL[, , i]=hessian(wplis, rcis[[1]])
+   
+   #Calculate Variance matrix J  for WPL (meat for  informative sampling design)
+   Jis_WPL[, , i]=fast_J_WPL(y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,
+                             x=TwostageSRSWORSampleis$x, pos=TwostageSRSWORSampleis$ID_unit,  sc=TwostageSRSWORSampleis$PSU, n1, N1, 
+                             n2infor= n2is, N2,  theta=rcis[[1]] )
+   
+   #sanwich estimator for WPL (informative sampling )
+   Gis_WPL[,,i]=  tryCatch(solve(His_WPL[, , i])%*% Jis_WPL[, , i]%*% t(solve(His_WPL[, , i])),   error=function(e) matrix(NaN, 4,4))
+   
+   #Pairwise score function WPL (informative sampling)
+   PSis_WPL[i, ]<- pairscore_WPL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x,
+                                 theta=c(truevalue[1:2], log(truevalue[3:4]),  truevalue[5], 
+                                               log(truevalue[6])),TwostageSRSWORSampleis$ID_unit, TwostageSRSWORSampleis$PSU, n1, N1,  n2infor=n2is , N2)
+   
+}	
+
+
+#boxplot for uninformative sampling (NML, PL and WPL)
+color=c( rep(c("green", "blue", "red", "yellow", "purple", "orange"), 6))
+name=c("alpha_NML", "beta_NML", "sigma^2_NML", "tau^2_NML", "alpha_PL", "beta_PL", "sigma^2_PL", "tau^2_PL", "alpha_WPL", "beta_WPL", "sigma^2_WPL", "tau^2_WPL" )
+boxplot(cbind(Fit_NML[,c(1:6)],Fit_PL[,c(1:6)], Fit_WPL[,c(1:6)]) ,   col=color)
+abline(h=0)
+
+#boxplot for informative sampling (NML,PL and WPL)
+boxplot(cbind(Fitis_NML[,c(1:6)],Fitis_PL[,c(1:6)], Fitis_WPL[,c(1:6)]) ,   col=color)
+abline(h=0)
+
+
+
+#create a table for latex
+#install.packages("xtable")
+library(xtable)
+
+construct_header <- function(df, grp_names, span, align = "c", draw_line = T) {
+    if (length(align) == 1) align <- rep(align, length(grp_names))
+    if (!all.equal(length(grp_names), length(span), length(align)))
+    stop("grp_names and span have to have the same length!")
+    
+    if (ncol(df) < sum(span)) stop("Span has to be less or equal to the number of columns of df")
+    
+    header <- mapply(function(s, a, grp) sprintf("\\multicolumn{%i}{%s}{%s}", s, a, grp),
+    span, align, grp_names)
+    header <- paste(header, collapse = " & ")
+    header <- paste0(header, " \\\\")
+    
+    if (draw_line) {
+        # where do we span the lines:
+        min_vals <- c(1, 1 + cumsum(span)[1:(length(span) - 1)])
+        max_vals <- cumsum(span)
+        line <- ifelse(grp_names == "", "",
+        sprintf("\\cmidrule(lr){%i-%i}", min_vals, max_vals))
+        line <- paste(line[line != ""], collapse = " ")
+        
+        header <- paste0(header, "  ", line, "\n  ")
+    }
+    
+    addtorow <- list(pos = list(-1, -1, nrow(df)),
+    command = c("\\hline\n  ", header, "\\hline\n  "))
+    return(addtorow)
+}
+
+#install.packages("expm")
+library("expm") #use sqrtm function
+
+#define the squre root of J
+sqrtJ_PL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtJ_PL[,,i]=sqrtm(J_PL[, , i])
+}
+
+sqrtJis_PL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtJis_PL[,,i]=sqrtm(Jis_PL[, , i])
+}
+
+sqrtJ_WPL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtJ_WPL[,,i]=sqrtm(J_WPL[, , i])
+}
+
+sqrtJis_WPL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtJis_WPL[,,i]=sqrtm(Jis_WPL[, , i])
+}
+
+#define the squre root of G
+sqrtG_PL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtG_PL[,,i]=sqrtm(G_PL[, , i])
+}
+
+sqrtGis_PL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtGis_PL[,,i]=sqrtm(Gis_PL[, , i])
+}
+
+sqrtG_WPL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtG_WPL[,,i]=sqrtm(G_WPL[, , i])
+}
+
+sqrtGis_WPL<-array(0, c(6,6, LOTS))
+for ( i in 1:LOTS){
+   sqrtGis_WPL[,,i]=sqrtm(Gis_WPL[, , i])
+}
+
+
+#bias and sd for uninformative sampling (NML, PL, WPL)
+df<- matrix(c(apply(Fit_NML, 2,  mean), apply(Fit_NML, 2, sd), apply(Fit_PL, 2, mean), apply(Fit_PL, 2, sd),diag(apply(sqrtG_PL, 1:2,  mean)),  apply(Fit_WPL, 2, mean), apply(Fit_WPL, 2, sd), diag(apply(sqrtG_WPL, 1:2,  mean))),ncol=8)
+df<-cbind(c("alpha", "beta", "sigma^2", "tau_11^2", "tau_12", "tau_22^2"), df)
+colnames(df)<-c("",c("bias", "sd"), rep(c("bias", "sd","G^(-\frac{1}{2})"), 2))
+df           
+df_header <- construct_header(
+   # the data.frame or matrix that should be plotted
+   df,
+   # the labels of the groups that we want to insert
+   grp_names = c("uninformtive", "NML", "PL", "WPL"),
+   # the number of columns each group spans
+   span = c(1, 2, 3, 3),
+   # the alignment of each group, can be a single character (lcr) or a vector
+   align = "c"
+)
+print(xtable(df), add.to.row = df_header, include.rownames = F, hline.after = F)      
+
+
+
+
+#variance estimator for uninformative sampling (PL, WPL)          
+vardf<-matrix(c( apply(PS_PL, 2, mean),apply(PS_PL, 2, sd),diag(apply(sqrtJ_PL, 1:2, mean)),apply(PS_WPL, 2, mean),apply(PS_WPL, 2, sd), diag(apply(sqrtJ_WPL, 1:2, mean))),ncol=6)
+vardf<-cbind(c("alpha", "beta", "sigma^2", "tau_11^2", "tau_12", "tau_22^2"), vardf)
+colnames(vardf)<-c("parameter", rep(c("mean of PS", "sd of PS", "J^{\frac{1}{2}}"), 2))
+vardf
+vardf_header <- construct_header(
+   # the data.frame or matrix that should be plotted
+   vardf,
+   # the labels of the groups that we want to insert
+   grp_names = c("",  "PL", "WPL"),
+   # the number of columns each group spans
+   span = c(1, 3, 3),
+   # the alignment of each group, can be a single character (lcr) or a vector
+   align = "c"
+)
+print(xtable(vardf), add.to.row = vardf_header, include.rownames = F, hline.after = F)
+
+
+#bias and sd for informative sampling (NML, PL, WPL)
+dfis<- matrix(c(apply(Fitis_NML, 2,  mean),apply(Fitis_NML, 2, sd) , apply(Fitis_PL, 2, mean),apply(Fitis_PL, 2, sd),
+                diag(apply(sqrtGis_PL, 1:2,  mean)),
+                apply(Fitis_WPL, 2, mean),apply(Fitis_WPL, 2, sd),diag(apply(sqrtGis_WPL, 1:2,  mean))),  ncol=8 )
+dfis<-cbind(c("alpha", "beta", "sigma^2", "tau_11^2", "tau_12", "tau_22^2"), dfis)
+colnames(dfis)<-c("parameter", c("bias", "sd"), rep(c("bias", "sd", "G^{-\frac{1}{2}}"), 2))
+dfis
+dfis_header <- construct_header(
+   # the data.frame or matrix that should be plotted
+   dfis,
+   # the labels of the groups that we want to insert
+   grp_names = c("", "NML", "PL", "WPL"),
+   # the number of columns each group spans
+   span = c(1, 2, 3, 3),
+   # the alignment of each group, can be a single character (lcr) or a vector
+   align = "c"
+)
+print(xtable(dfis), add.to.row = dfis_header, floating=TRUE,  include.rownames = F, hline.after = F)
+
+
+#variance estimator for informative sampling (PL, WPL)          
+vardfis<-matrix(round(c( apply(PSis_PL, 2, mean),apply(PSis_PL, 2, sd), diag(apply(sqrtJis_PL, 1:2, mean)),apply(PSis_WPL, 2, mean),apply(PSis_WPL, 2, sd), diag(apply(sqrtJis_WPL, 1:2, mean)) ),2), ncol=6 )
+vardfis<-cbind(c("alpha", "beta", "sigma^2", "tau_11^2", "tau_12", "tau_22^2"), vardfis)
+colnames(vardfis)<-c("parameter", rep(c("mean of PS", "sd of PS", "J^{\frac{1}{2}}"), 2))
+vardfis
+vardfis_header <- construct_header(
+   # the data.frame or matrix that should be plotted
+   vardfis,
+   # the labels of the groups that we want to insert
+   grp_names = c("",  "PL", "WPL"),
+   # the number of columns each group spans
+   span = c(1, 3, 3),
+   # the alignment of each group, can be a single character (lcr) or a vector
+   align = "c"
+)   
+print(xtable(vardfis), add.to.row = vardfis_header, include.rownames = F, hline.after = F) 
+
+
