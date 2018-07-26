@@ -1,4 +1,9 @@
 
+#install.packages(c("sampling", rockchalk", "matrixcalc", "lme4","numDeriv", "RColorBrewer","xtable"))
+packages<-c("sampling", "rockchalk", "matrixcalc", "lme4", "numDeriv", "RColorBrewer","xtable" )
+lapply(packages, library,character.only = TRUE)
+
+
 #setting: notation
 N1=100 ## number of sampling cluster in the first stage (population level)
 N2=100 ##number of elements in each sampling cluster (population level)
@@ -38,18 +43,12 @@ truetau2_22=1
 PairCov<-matrix(c(truetau2_11, truetau_12, truetau_12, truetau2_22), nrow=2, byrow=T)
 det(PairCov)
 ###check positive definite 
-#install.packages("matrixcalc")
-library("matrixcalc")
 is.positive.definite(PairCov)
 
 truevalue<-c(truebeta1,truebeta2, truesigma2, truetau2_11, truetau_12, truetau2_22)
 names(truevalue)<-c("beta1", "beta2", "sigma2", "tau2_11", "tau_12", "tau2_22")
 
 ##Population data
-#install.packages("MASS")
-library("MASS")
-#install.packages("rockchalk")
-library(rockchalk)
 re=mvrnorm(n=T, mu = c(0,0), Sigma = PairCov) #generate vector of random effect (a, b)
 population$a<-re[,1][population$cluster]
 population$b<-re[,2][population$cluster]
@@ -64,9 +63,6 @@ n1=ceiling(N1/10) ##number of sampling cluster in the first stage (sample level)
 n2=ceiling(N2/10) ##umber of elements in each sampling cluster ( sample level)
 
 # Using sampling package for two-stage sampling (First-stage: SRSWOR, Second-stage: SRSWOR ) 
-#install.packages("sampling")
-library("sampling")
-
 ##uninformative two-stage  sampling design (First-stage: SRSWOR, Second-stage: SRSWOR) and extracts the observed data
 ##first-stage
 FirststageSRSWOR=srswor(n1, N1)
@@ -98,9 +94,6 @@ SecondstageSRSWORis=unlist(lapply(n2is[c(which(n2is!=0))], function(v) return(sr
 TwostageSRSWORSampleis=FirststageSRSWORSample[c(which(SecondstageSRSWORis==1)), ]
 
 # Estimation: full-likelihood
-#install.packages("lme4")
-library(lme4)
-
 ##Census estimator 
 fit_NML=lmer(y~(1+x|cluster)+x,data=population)
 
@@ -341,7 +334,9 @@ fit_PL<-function(y,g,x, pars){
 ###uninformative optimization problem for PL (without weight)
 estimator_PL<-fit_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x, pars=truevalue)
 estimator_PL[[1]]-truevalue
+##informative sampling (without weight) at the estimated value
 pairscore_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x,estimator_PL[[1]])
+##informative sampling (without weight) at the true value
 pairscore_PL(TwostageSRSWORSample$y, TwostageSRSWORSample$cluster, TwostageSRSWORSample$x,truevalue)
 
 fitis_PL<-function(y,g,x, pars){
@@ -380,7 +375,6 @@ fitis_PL<-function(y,g,x, pars){
 ###informative sampling
 estimatoris_PL<- fitis_PL(y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x, pars=truevalue)
 estimatoris_PL[[1]]-truevalue
-
 ##informative sampling (without weight) at the estimated value
 pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster, TwostageSRSWORSampleis$x,estimatoris_PL[[1]])
 ##informative sampling (without weight) at the true value
@@ -401,7 +395,6 @@ C4<-function(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,n1, N1, n2infor,N2){
    
 }
 
-
 ##Define the second-order inclusion probability
 SecOrdPi<-function(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2){
    #pi<-SecOrdPiInternal(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2)	
@@ -409,7 +402,6 @@ SecOrdPi<-function(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2){
    #if ((pi-Cpi)/(pi+Cpi)>1e-10) stop(paste(pos1, pos2,pos3, pos4,sc1, sc2,sc3, sc4,":",pi,Cpi,sep=","))
    Cpi
 }
-
 
 
 ##Define the  fourth-order inclusion probability
@@ -546,23 +538,17 @@ fitis_WPL<-function(y,g,x, pos, sc,n1, N1, n2infor, N2,  pars){
 ###informative sampling (with weight)
 estimatoris_WPL<- fit_WPL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster,TwostageSRSWORSampleis$x, TwostageSRSWORSampleis$ID_unit, 
                           TwostageSRSWORSampleis$PSU,n1, N1,n2infor=n2is, N2,  pars=truevalue)
-
 estimatoris_WPL[[1]]-truevalue
 
 ##informative sampling (with weight) at the estimated value
 pairscore_WPL(y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x, theta=estimatoris_WPL[[1]],
               pos=TwostageSRSWORSampleis$ID_unit, TwostageSRSWORSampleis$PSU, n1, N1, n2infor=n2is,N2 )
-
 ##informative sampling (with weight) at the true value
 pairscore_WPL(y=TwostageSRSWORSampleis$y, g=TwostageSRSWORSampleis$cluster, x=TwostageSRSWORSampleis$x, theta=truevalue,
               pos=TwostageSRSWORSampleis$ID_unit, TwostageSRSWORSampleis$PSU, n1, N1, n2infor=n2is,N2 )
 
 #variance estimation for PL under stratified SRSWORS
-#define the pairwise likelihood (without weight)
-#install.packages("numDeriv")
-library("numDeriv")
-
-#uninformative
+#Hessian for PL uninformative
 estH_PL=-jacobian(function(theta){with(TwostageSRSWORSample,
                                        pairscore_PL(y,cluster,x,theta))}, x=estimator_PL[[1]],method="complex")
 
@@ -636,8 +622,6 @@ sanestimator_PL= solve(estH_PL)%*% estJ_PL%*% solve(t(estH_PL))
 #Calculate Hessian matrix H for PL (bread for informative sampling design)
 estHis_PL=-jacobian(function(theta){with(TwostageSRSWORSampleis,
                                          pairscore_PL(y,cluster,x,theta))}, x=estimatoris_PL[[1]],method="complex")
-
-
 #Calculate  variance matrix J  for PL (meat for informative sampling design)
 estJis_PL=fast_J_PL(y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,x=TwostageSRSWORSampleis$x,pos=TwostageSRSWORSampleis$ID_unit,  sc=TwostageSRSWORSampleis$PSU, n1, N1,   n2infor=n2is, N2, theta=estimatoris_PL[[1]] )
 #sanwich estimator (informative sampling )
@@ -645,13 +629,8 @@ sanestimatoris_PL = solve(estHis_PL)%*% estJis_PL%*% t(solve(estHis_PL))
 
 
 #variance estimation for WPL under two-stage SRSWORS
-##define H as in page 96 of my thesis as \hat{H}(\est)
-#define weighted pairwise likelihood WPL 
-
-##uninformative sampling
-
+##Hessian for WPL uninformative sampling
 estH_WPL=-jacobian(function(theta){with(TwostageSRSWORSample, pairscore_WPL(y,cluster,x,theta, ID_unit,PSU, sum(FirststageSRSWOR*n2!=0), N1,FirststageSRSWOR*n2,   N2 ))}, x=estimator_WPL[[1]],method="complex")
-
 estH_WPL
 
 ##define \hat{J}(\theta) as in page 97 of my thesis and  evaluate at the WPLE
@@ -724,23 +703,19 @@ estJ_WPL=fast_J_WPL(y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,
 sanestimator_WPL= solve(estH_WPL)%*% estJ_WPL%*% t(solve(estH_WPL))
 
 
-##informative sampling
+##Hessian for WPL informative sampling
 estHis_WPL=-jacobian(function(theta){with(TwostageSRSWORSampleis,
                                           pairscore_WPL(y,cluster,x,theta, ID_unit,PSU, sum(n2is!=0), N1,n2is,   N2 ))}, x=estimatoris_WPL[[1]],method="complex")
-
 estHis_WPL
-
 estJis_WPL=fast_J_WPL(y=TwostageSRSWORSampleis$y,g=TwostageSRSWORSampleis$cluster,
                       x=TwostageSRSWORSampleis$x, pos=TwostageSRSWORSampleis$ID_unit,  sc=TwostageSRSWORSampleis$PSU, n1, N1, 
                       n2infor= n2is, N2, theta=estimatoris_WPL[[1]] )
-
 # sanwich estimator H^{-1}J (H^{-1})^\T
 ##informaitve
 sanestimatoris_WPL= solve(estHis_WPL)%*% estJis_WPL%*% t(solve(estHis_WPL))
 
 
 #simulation
-
 LOTS=150
 #Fit from NML,PL, WPL for uninformative sampling
 Fit_NML<-matrix(0,nrow=LOTS,ncol=6)
@@ -1011,11 +986,7 @@ for(i in 1:LOTS){
 }	
 
 
-
-# install.packages("RColorBrewer")
-library(RColorBrewer)
 color<-c("#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c" )
-
 #boxplot for uninformative sampling (NML, PL and WPL)
 color=c( rep(color, 3))
 name=c("alpha_NML", "beta_NML", "sigma^2_NML", "tau^2_NML", "alpha_PL", "beta_PL", "sigma^2_PL", "tau^2_PL", "alpha_WPL", "beta_WPL", "sigma^2_WPL", "tau^2_WPL" )
@@ -1027,14 +998,7 @@ boxplot(cbind(Fitis_NML[,c(1:6)],Fitis_PL[,c(1:6)], Fitis_WPL[,c(1:6)]) ,   col=
 abline(h=0)
 
 
-
-
-
-
 #create a table for latex
-#install.packages("xtable")
-library(xtable)
-
 construct_header <- function(df, grp_names, span, align = "c", draw_line = T) {
    if (length(align) == 1) align <- rep(align, length(grp_names))
    if (!all.equal(length(grp_names), length(span), length(align)))
