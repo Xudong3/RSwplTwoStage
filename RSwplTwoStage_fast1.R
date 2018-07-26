@@ -2,7 +2,7 @@
 #install.packages(c("sampling", rockchalk", "matrixcalc", "lme4","numDeriv", "RColorBrewer","xtable"))
 packages<-c("sampling", "rockchalk", "matrixcalc", "lme4", "numDeriv", "RColorBrewer","xtable" )
 lapply(packages, library,character.only = TRUE)
-
+dyn.load("FourOrdPiTwostage.so")
 
 #setting: notation
 N1=100 ## number of sampling cluster in the first stage (population level)
@@ -381,7 +381,6 @@ pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster, TwostageS
 pairscore_PL(TwostageSRSWORSampleis$y, TwostageSRSWORSampleis$cluster, TwostageSRSWORSampleis$x,truevalue)
 
 
-dyn.load("FourOrdPiTwostage.so")
 
 # second-order inclusion probability
 C2<-function(pos1, pos2,sc1, sc2,n1, N1, n2infor,N2){
