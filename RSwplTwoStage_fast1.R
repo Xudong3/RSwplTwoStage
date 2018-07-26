@@ -74,7 +74,7 @@ TwostageSRSWORSample<-FirststageSRSWORSample[c(which(SecondstageSRSWOR==1)),]
 
 #informative two-stage sampling design (first-stage: SRSWOR, Second-stage:SRSWOR)
 ##number of elements in each sampling cluster
-param=c(0.05, 0.45)
+param=c(1.5, 0.45)
 
 n2informative= function(r, sc, param, N2){
    a=rep(NA, length=length(unique(population$sc)))
@@ -369,7 +369,7 @@ fitis_PL<-function(y,g,x, pars){
    }
    
    
-   optim(pars,func1, gr,method="L-BFGS-B",lower=c(-Inf, -Inf, 0.1, 0, -Inf, 0), control=list(fnscale=-1, parscale=c(1/n^2,1/n^2,1/n^2,1/n^2, 1/n^2, 1/n^2)))
+   optim(pars,func1, gr,method="L-BFGS-B",lower=c(-Inf, -Inf, 0.1, 0, -Inf, 0), control=list(fnscale=-1, parscale=c(1/n^0.2,1/n^0.2,1/n^0.2,1/n^0.2, 1/n^0.2, 1/n^0.2)))
 }
 
 ###informative sampling
@@ -485,7 +485,7 @@ fit_WPL<-function(y,g,x, pos, sc,n1, N1, n2infor, N2,  pars){
                               sigma2=theta[3],tau2_11=theta[4],tau_12=theta[5], tau2_22=theta[6])
       c(sum(wincrementda), sum(wincrementdb), sum(wincrementds), sum(wincrementdt_11), sum(wincrementdt_12), sum(wincrementdt_22))/T
    }
-   optim(pars,func1,gr,  method="L-BFGS-B",lower=c(-Inf, -Inf, 0.1, 0, -Inf, 0),control=list(fnscale=-1, parscale=c(1/n^2,1/n^0.2,1/n^0.2,1/n^0.2, 1/n^0.2, 1/n^0.2)))
+   optim(pars,func1,gr,  method="L-BFGS-B",lower=c(-Inf, -Inf, 0.1, 0, -Inf, 0),control=list(fnscale=-1, parscale=c(1/n^0.2,1/n^0.2,1/n^0.2,1/n^0.2, 1/n^0.2, 1/n^0.2)))
 }
 
 ##Find the WPML
