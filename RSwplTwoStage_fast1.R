@@ -692,7 +692,6 @@ fast_J_WPL<-function(y,g,x,  pos,  sc, n1, N1, n2infor,N2, theta){
    # attr(rval, "pairs")<-keep ##debug
    rval
 }
-
 estJ_WPL=fast_J_WPL(y=TwostageSRSWORSample$y,g=TwostageSRSWORSample$cluster,
                     x=TwostageSRSWORSample$x, pos=TwostageSRSWORSample$ID_unit,  sc=TwostageSRSWORSample$PSU, n1, N1, 
                     n2infor= FirststageSRSWOR*n2, N2, theta=estimator_WPL[[1]] )
@@ -771,7 +770,6 @@ PS_PL_true<-matrix(0,nrow=LOTS,ncol=6)
 #Pairwise score function for PL for informative sampling at the census value 
 PS_PL_cen<-matrix(0,nrow=LOTS,ncol=6)
 
-
 #Pairwise score function for PL for  informative sampling at the esimated value
 PSis_PL<-matrix(0,nrow=LOTS,ncol=6)
 
@@ -805,19 +803,11 @@ sqrt_diagJis_PL=matrix(0, nrow=LOTS, ncol=6)
 sqrt_diagJ_WPL=matrix(0, nrow=LOTS, ncol=6)
 sqrt_diagJis_WPL=matrix(0, nrow=LOTS, ncol=6)
 
-
-
-
-
 #define the squre root of G
 sqrt_diagG_PL=matrix(0, nrow=LOTS, ncol=6)
 sqrt_diagGis_PL=matrix(0, nrow=LOTS, ncol=6)
 sqrt_diagG_WPL=matrix(0, nrow=LOTS, ncol=6)
 sqrt_diagGis_WPL=matrix(0, nrow=LOTS, ncol=6)
-
-
-
-
 
 
 ##Estimation: NML, PL and WPL 
